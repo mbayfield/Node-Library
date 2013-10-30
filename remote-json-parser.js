@@ -1,6 +1,34 @@
+/*
+
+	Usage: require this with processing function
+	exports = module.exports = function(done) {
+		migration.loadData('[]', [processing function], done);
+	};
+
+*/
+
 var request = require('request'),
 	fs = require('fs'),
-	readline = require('readline');
+	readline = require('readline'),
+	dir = __dirname + '/data';
+
+// Settings
+var cacheFile = true, // cache the file locally for use
+	logErrorsToFile = true;
+
+
+// Ensure the data dir exists
+try {
+	if (!fs.statSync(dir).isDirectory()) {
+		throw new Error(dir + ' exists and is not a directory');
+	}
+} catch (err) {
+	if (err.code === 'ENOENT') {
+		fs.mkdirSync(dir);
+	} else {
+		throw err;
+	}
+}
 
 /**
 	Data Loading
@@ -15,11 +43,10 @@ var dataServer 	= '[server]',
 		'[key]': 	'[filename]'
 	};
 
-exports.loadData = function(key, callback) {
+exports.loadData = function(key, it, callback) {
 	
-	var path = dataServer + '/' + dataPath + '/' + dataKeyMap[key];
-	var cacheFile = false; // cache the file locally for use
-	var logErrorsToFile = true;
+	var path = dataServer + '/' + dataPath + '/' + dataKeyMap[key],
+		localFilePath = dir + '/' + dataKeyMap[key];
 	
 	if (!(key in dataKeyMap)) {
 		throw new Error('Invalid data key provided (' + key + ').')
@@ -35,8 +62,16 @@ exports.loadData = function(key, callback) {
 			}).pipe(fs.createWriteStream(dataKeyMap[key]));		
 		}
 	});
+
+	var lines = 0,
+		complete = false;
+	
+	var check = function() {
+		if (!lines && complete) callback();
+	}
 	
 	var readDataFile = function() {
+		
 		var rd = readline.createInterface({
 			input: fs.createReadStream(dataKeyMap[key]),
 			output: process.stdout,
@@ -44,12 +79,18 @@ exports.loadData = function(key, callback) {
 		});
 
 		rd.on('line', function(line) {
-			// console.log(line);
+			
+			lines++;
+			
 			try {
 				var obj = JSON.parse(line.toString()); // parse the JSON	
-				callback(obj);
+				it(obj, function() {
+					lines--;
+					check();
+				});
 			}
 			catch(e){
+				lines--;
 				console.log("------------------------------");
 				console.log("ERROR PROCESSING JSON:");
 				console.log("------------------------------");
@@ -66,12 +107,13 @@ exports.loadData = function(key, callback) {
 			
 		}).on('close', function() {
 			if (!cacheFile) {
-				// if we are not caching the file - delete it
-				fs.unlink(dataKeyMap[key], function(err) {
-					return callback();
+				fs.unlink(localFilePath, function(err) {
+					complete = true;
+					check();
 				});
 			} else {
-				return callback();
+				complete = true;
+				check();
 			}
 		});
 	}
